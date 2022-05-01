@@ -4,7 +4,7 @@ from ttb.util.singleton import Singleton
 from datetime import datetime
 
 fmt_Ymd = "%Y%m%d"
-CLIENT_ID = '686FJCQ81PSX5HEOCPZYQ0JM8RRUR0BQ'
+CLIENT_ID = '686FJCQ81PSSX5HEOCPZYQU0JM8RRNUR0BQ'
 CALL_BACK_URL = 'https://localhost'
 CRED_PATH = '../auth/cred.json'
 
@@ -119,41 +119,12 @@ class Config(metaclass=Singleton):
         return "open_positions"
 
     @property
-    def long_watch_list_name(self):
-        return 'LONG_POS'
-
-    @property
     def price_poll_freq(self):
         return 180
-
-    #### alert related properties
-    @property
-    def alert_src_group(self):
-        return ["V5.4", "V5.5"]
 
     @property
     def alert_timeout_seconds(self):
         return 300
-
-    @property
-    def alerts_buy_min_votes(self):
-        return len(self.alert_src_group)
-
-    @property
-    def alerts_sell_min_votes(self):
-        return 1
-
-    @property
-    def buy_watchlist(self):
-        return "LIVE-BSKT"
-
-    @property
-    def sell_watchlist(self):
-        return "LIVE-BSKT"
-
-    @property
-    def wl_account(self):
-        return "252191256"
 
     ## default by quantity
     @property
