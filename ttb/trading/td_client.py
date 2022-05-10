@@ -85,3 +85,8 @@ class TosTrader:
                 rs.add(item['instrument']['symbol'])
         return rs
 
+
+if __name__ == "__main__":
+    td_trader = TosTrader()
+
+
