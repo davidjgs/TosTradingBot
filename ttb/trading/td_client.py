@@ -85,29 +85,3 @@ class TosTrader:
                 rs.add(item['instrument']['symbol'])
         return rs
 
-
-if __name__ == "__main__":
-    td_trader = TosTrader()
-
-    ##quotes = td_trader.get_quotes(['DDOG', 'SQ'])
-
-    ##print(f'Quotes ==> {quotes}', end='\n')
-    '''
-    inst = td_trader.get_instrument('852234103')
-    print(f'Instrument ==> {inst}', end='\n')
-
-    accountId = td_trader.get_account_id()
-    print(f'Account_id ==> {accountId}', end='\n')
-  
-    for i in range(1, 30):
-        instruments = td_trader.get_watchlist_instruments('LIVE-BSKT', account='252191256')
-        print(f'{i}. instruments[{len(instruments)}] ==> {instruments}', end='\n')
-        time.sleep(20)
-
-  
-    symbols = td_trader._get_symbols_in_wl(watchlst_id='1773132247', acct='252191256')
-    print(f'symbols ==> {symbols}', end='\n')
-    '''
-    wlist = td_trader.create_or_update_watchlist(wl_name='TEST1', symbols=['FCEL'], acct='252191256')
-    print(f'wList ==> {wlist}', end='\n')
-
