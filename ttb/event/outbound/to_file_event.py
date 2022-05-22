@@ -18,6 +18,7 @@ class ToFileEventHandler(EventHandler):
         self.__event_file = conf.events_journal
         self.__pnl_file = conf.pnl_journal
         self.__positions_file = conf.open_positions_journal
+        self.__eod_price_file = conf.eod_prices_file
         self.__today = conf.date_today
         self.__target_dir = f'{conf.journal_dir}{os.sep}{self.__today}'
         if not os.path.exists(self.__target_dir):
@@ -43,4 +44,6 @@ class ToFileEventHandler(EventHandler):
             chosen = self.__pnl_file
         elif eventType == EventType.POSITIONS:
             chosen = self.__positions_file
+        elif eventType == EventType.EOD_PRICE:
+            chosen = self.__eod_price_file
         return f"{self.__target_dir}{os.sep}{chosen}_{self.__today}.json" if chosen else None

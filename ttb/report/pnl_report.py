@@ -48,8 +48,8 @@ def transform(data: list):
             r['time_sold'],
             r['alert_buy_ts'],
             r['alert_sell_ts'],
-            r['buy_scanner'],
-            r['sell_scanner'],
+            r['buy_strategy'],
+            r['sell_strategy'],
             r['pnl_type'],
             1 if r['price_chg_pct'] > 0 else -1 if r['price_chg_pct'] < 0 else 0
         ])

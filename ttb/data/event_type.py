@@ -7,4 +7,5 @@ class EventType(Enum):
     PNL = 3
     POSITIONS = 4
     RPA_ALERT = 5
+    EOD_PRICE = 6
 

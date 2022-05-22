@@ -4,6 +4,7 @@ from ttb.cfg.config import Config
 from ttb.control.trading_control import TradeControl
 from ttb.data.event_type import EventType
 from ttb.data.pnl_type import PnlType
+from ttb.db.db_persist import DBPersister
 from ttb.event.inbound.rpa_alert_reader import AlertReader
 from ttb.event.outbound.to_file_event import ToFileEventHandler
 from ttb.report.pnl_report import PnlReporter
@@ -17,11 +18,12 @@ from ttb.util.app_logging import getLogger_rpa
 
 logger = getLogger_rpa('ttb.main.bot_manager_rpa')
 
-
 class BotManager:
 
     def __init__(self, config=None):
         self.__conf = config or Config()
+        self.cob_date = self.__conf.date_today
+        self.default_acct = self.__conf.default_acct
         self.__event_q = Queue()
         self.__ticker_q = Queue()
         self.__hist_price_q = Queue()
@@ -30,10 +32,10 @@ class BotManager:
         self.__daily_trade_amt_limit = self.__conf.daily_trade_amt_limit
         self.__total_amt = 0
         self.trading_end_time = timeutil.parse_time(self.__conf.trade_end_time)
-        self.__long_positions = {}
+        self.long_positions = {}
         self.__executions = {}
         self.__pnl = {}
-        self.__persister = None  ##DBPersister()
+        self.__persister = DBPersister()
         self.__alert_reader = AlertReader(self.__conf, self.__event_q, self.__persister)
         self.__trader = TosTrader(self.__conf)
         self.__event_handler = ToFileEventHandler(self.__conf)
@@ -42,7 +44,6 @@ class BotManager:
 
     def start(self):
 
-        print('Starting BotManager ...')
         logger.info('Starting BotManager ...')
 
         thread = threading.Thread(target=self.__alert_reader.start)
@@ -51,7 +52,6 @@ class BotManager:
         self.work()
 
     def work(self):
-        print('Start working ...')
         logger.info('Start working ...')
         while datetime.datetime.now().timestamp() < self.trading_end_time.timestamp():
             while not self.__event_q.empty():
@@ -69,7 +69,6 @@ class BotManager:
         next_move = self.next_move(action)
         source = f'#B4#{version}#'
         if next_move:
-            print(f'processing event {event}')
             logger.info(f'processing event {event}')
             side = next_move
             self.trade(symbols, side, version, source, ts)
@@ -87,20 +86,22 @@ class BotManager:
     def trade(self, symbols, side, version, source, ts):
         if symbols:
             for ticker in symbols:
-                dt = datetime.datetime.now()
-                exec_time = dt.strftime("%Y/%m/%d-%H:%M:%S")
-                if side == 'BUY' and ticker not in self.__long_positions:
+                execution = None
+                pnl = None
+                exec_time = ''.join(datetime.datetime.now(tz=datetime.datetime.now().astimezone().tzinfo).isoformat(
+                    timespec='milliseconds').rsplit(':', 1))
+                if side == 'BUY' and (version not in self.long_positions or ticker not in self.long_positions[version]):
                     price_b = self.execute_buy(ticker)
                     if price_b:
                         buy_qty = self.calc_qty(price_b)
                         if buy_qty:
-                            self.__long_positions.setdefault(version, dict())[ticker] = {'price': float(price_b),
+                            self.long_positions.setdefault(version, dict())[ticker] = {'price': float(price_b),
                                                                                          'qty': buy_qty,
                                                                                          'exec_time': exec_time,
                                                                                          'alert_buy_ts': ts,
-                                                                                         'scanner': source}  # (float(price_b), exec_time)
+                                                                                         'strategy': source}  # (float(price_b), exec_time)
                             # self.__priceAnalyzer.add_price(ticker, price_b, dt.strftime('%H%M%S'))
-                            execution_buy = dict(
+                            execution = dict(
                                 event_type=EventType.TRADE,
                                 ticker=ticker,
                                 price=price_b,
@@ -108,31 +109,28 @@ class BotManager:
                                 side=side,
                                 exec_time=exec_time,
                                 alert_buy_ts=ts,
-                                scanner=source,
+                                strategy=source,
                             )
-                            # self.__persister.insert_execution(execution_buy)
                             self.__total_amt += price_b*buy_qty
                             self.__ticker_q.put(ticker)
-                            self.publish_event(execution_buy)
                         else:
                             logger.info(f"# of shares < 1, skipped buy for : {ticker}")
                     else:
                         logger.error(f'failed to execute buy for : {ticker}')
-                elif side == 'SELL' and version in self.__long_positions and ticker in self.__long_positions[version]:
+                elif side == 'SELL' and version in self.long_positions and ticker in self.long_positions[version]:
                     price_s = self.execute_sell(ticker)
                     if price_s:
                         price_sold = float(price_s)
-                        exec_b = self.__long_positions[version].pop(ticker)
-                        if len(self.__long_positions[version]) == 0:
-                            self.__long_positions.pop(version)
+                        exec_b = self.long_positions[version].pop(ticker)
+                        if len(self.long_positions[version]) == 0:
+                            self.long_positions.pop(version)
                         price_bought = exec_b['price']
                         bought_time = exec_b['exec_time']
                         alert_b_ts = exec_b['alert_buy_ts']
-                        buy_scanner = exec_b['scanner']
+                        buy_strategy = exec_b['strategy']
                         qty = exec_b['qty']
                         pct_chg = round(100 * (price_sold - price_bought) / price_bought, ndigits=4)
-                        exec_time = datetime.datetime.now().strftime("%Y/%m/%d-%H:%M:%S")
-                        execution_sell = dict(
+                        execution = dict(
                             event_type=EventType.TRADE,
                             ticker=ticker,
                             price=price_sold,
@@ -140,7 +138,7 @@ class BotManager:
                             side=side,
                             alerts_sell_ts=ts,
                             exec_time=exec_time,
-                            scanner=source,
+                            strategy=source,
                         )
                         pnl = dict(
                             event_type=EventType.PNL,
@@ -153,19 +151,23 @@ class BotManager:
                             time_sold=exec_time,
                             alert_buy_ts=alert_b_ts,
                             alert_sell_ts=ts,
-                            buy_scanner=buy_scanner,
-                            sell_scanner=source,
+                            buy_strategy=buy_strategy,
+                            sell_strategy=source,
                             version=version,
                             pnl_type=PnlType.REALIZED.name
                         )
                         self.__pnl.setdefault(ticker, list()).append(pnl)
-                        # self.__persister.insert_execution(execution_sell)
-                        self.publish_event(execution_sell)
-                        self.publish_event(pnl)
                     else:
                         logger.error(f'failed to execute sell for: {ticker}')
                 else:
                     logger.info(f'No long positions for {ticker}, action [{side}] ignored for ticker: {ticker}')
+
+                if execution:
+                    self.publish_event(execution)
+                    self.__persister.insert_execution(self.enrich(execution))
+                if pnl:
+                    self.publish_event(pnl)
+                    self.__persister.insert_pnl(self.enrich(pnl))
         else:
             logger.warning('invalid event')
 
@@ -201,12 +203,14 @@ class BotManager:
     def publish_event(self, event: dict):
         e_type = event['event_type']
         self.__event_handler.handle_event(event)
+
         if e_type == EventType.TRADE:
-            payload = dict(event_type=EventType.POSITIONS, positions=self.__long_positions)
+            ## also update positions
+            payload = dict(event_type=EventType.POSITIONS, positions=self.long_positions)
             self.__event_handler.handle_event(payload)
 
     def show_statistics(self):
-        logger.info(f'current positions : {self.__long_positions}')
+        logger.info(f'current positions : {self.long_positions}')
         logger.info('current PNLs summary ...')
         pnl_display = ""
         for (t, pnls) in self.__pnl.items():
@@ -225,32 +229,39 @@ class BotManager:
 
     def eod_process(self):
         logger.info('eod process ...')
-        if len(self.__long_positions) > 0:
-            for (ver, positions) in self.__long_positions.items():
-                tickers = list(positions.keys())
-                eod_prices = self.get_prices(tickers)
-                for t, p in eod_prices.items():
-                    price_bought = positions[t]['price']
-                    qty = positions[t]['qty']
-                    alert_b_ts = positions[t]['alert_buy_ts']
-                    pct_chg = round(100 * (p - price_bought) / price_bought, ndigits=4)
-                    pnl = dict(
-                        event_type=EventType.PNL,
-                        ticker=t,
-                        price_bought=price_bought,
-                        price_sold=p,
-                        price_chg_pct=pct_chg,
-                        qty=qty,
-                        time_bought=positions[t]['exec_time'],
-                        time_sold='EOD',
-                        alert_buy_ts=alert_b_ts,
-                        alert_sell_ts="N/A",
-                        buy_scanner=positions[t]['scanner'],
-                        sell_scanner='EOD',
-                        version=ver,
-                        pnl_type=PnlType.UN_REALIZED.name
-                    )
-                    self.__pnl.setdefault(t, list()).append(pnl)
+        eod_price_list = {'event_type': EventType.EOD_PRICE, "eod_prices": {}}
+        tickers = set()
+        for (ver, positions) in self.long_positions.items():
+            tickers.update(positions.keys())
+        eod_prices = self.get_prices(list(tickers))
+        for (ver, positions) in self.long_positions.items():
+            for t, pos in positions.items():
+                price_bought = pos['price']
+                p = eod_prices.get(t) or price_bought
+                qty = pos['qty']
+                alert_b_ts = pos['alert_buy_ts']
+                pct_chg = round(100 * (p - price_bought) / price_bought, ndigits=4)
+                pnl = dict(
+                    event_type=EventType.PNL,
+                    ticker=t,
+                    price_bought=price_bought,
+                    price_sold=p,
+                    price_chg_pct=pct_chg,
+                    qty=qty,
+                    time_bought=pos['exec_time'],
+                    time_sold='EOD',
+                    alert_buy_ts=alert_b_ts,
+                    alert_sell_ts="N/A",
+                    buy_strategy=pos['strategy'],
+                    sell_strategy='EOD',
+                    version=ver,
+                    pnl_type=PnlType.UN_REALIZED.name
+                )
+                self.__pnl.setdefault(t, list()).append(pnl)
+                eod_price_list['eod_prices'][t] = p
+        if tickers:
+            self.publish_event(eod_price_list)
+            self.__persister.insert_eod_prices(self.enrich(eod_price_list))
 
     def add_pnl(self, pnl: dict):
         self.__pnl.setdefault(pnl['ticker'], list()).append(pnl)
@@ -259,14 +270,42 @@ class BotManager:
         return self.__pnl
 
     def add_position(self, pos: dict):
-        self.__long_positions.update(pos)
+        self.long_positions.update(pos)
 
     def calc_qty(self, price_b):
         return self.__default_qty
         #max_buy_amt = min(self.__per_trade_amt_limit, self.__daily_trade_amt_limit-self.__total_amt)
         #return min(self.__default_qty, max_buy_amt//price_b)
 
+    def enrich(self, data: dict):
+        data['cob_date'] = self.cob_date
+        data['account'] = self.default_acct
+
+        return data
+
+'''
+def test_eod_price():
+    botManager.long_positions = {}
+    botManager.long_positions['V5.4'] = {}
+    botManager.long_positions['V5.4']['LIT'] = {}
+    botManager.long_positions['V5.4']['LIT']['price'] = 116.0
+    botManager.long_positions['V5.4']['LIT']['qty'] = 100
+    botManager.long_positions['V5.4']['LIT']['version'] = 'V5.4'
+    botManager.long_positions['V5.4']['LIT']['alert_buy_ts'] = '2022/05/13-09:57:14'
+    botManager.long_positions['V5.4']['LIT']['exec_time'] = '2022/05/13-09:57:14'
+    botManager.long_positions['V5.4']['LIT']['strategy'] = '#B4#V5.4#'
+
+    botManager.long_positions['V5.4']['LCID'] = {}
+    botManager.long_positions['V5.4']['LCID']['price'] = 17.1
+    botManager.long_positions['V5.4']['LCID']['qty'] = 100
+    botManager.long_positions['V5.4']['LCID']['version'] = 'V5.4'
+    botManager.long_positions['V5.4']['LCID']['alert_buy_ts'] = '2022/05/13-09:57:14'
+    botManager.long_positions['V5.4']['LCID']['exec_time'] = '2022/05/13-09:57:14'
+    botManager.long_positions['V5.4']['LCID']['strategy'] = '#B4#V5.4#'
+    botManager.eod_process()
+'''
 
 if __name__ == "__main__":
     botManager = BotManager()
     botManager.start()
+
